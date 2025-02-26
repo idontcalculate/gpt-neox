@@ -1,51 +1,54 @@
-from setuptools import setup, find_packages
-from torch.utils import cpp_extension
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension
-from torch.cuda import is_available as torch_cuda_available
-from pathlib import Path
-import subprocess
 
-def _get_cuda_bare_metal_version(cuda_dir):
-    raw_output = subprocess.check_output([cuda_dir + "/bin/nvcc", "-V"],
-                                         universal_newlines=True)
-    output = raw_output.split()
-    release_idx = output.index("release") + 1
-    release = output[release_idx].split(".")
-    bare_metal_major = release[0]
-    bare_metal_minor = release[1][0]
 
-    return raw_output, bare_metal_major, bare_metal_minor
+from megatron.utils import print_rank_0, setup_for_inference_or_eval
 
-srcpath = Path(__file__).parent.absolute()
-cc_flag = []
-_, bare_metal_major, _ = _get_cuda_bare_metal_version(
-    cpp_extension.CUDA_HOME)
-if int(bare_metal_major) >= 11:
-    cc_flag.append('-gencode')
-    cc_flag.append('arch=compute_80,code=sm_80')
+from megatron.text_generation_utils import generate_samples_input_from_file, generate_samples_from_prompt, generate_samples_unconditional, generate_samples_interactive
 
-nvcc_flags = ['-O3','-gencode', 'arch=compute_70,code=sm_70', '--use_fast_math', '-U__CUDA_NO_HALF_OPERATORS__', '-U__CUDA_NO_HALF_CONVERSIONS__',
-              '--expt-relaxed-constexpr', '--expt-extended-lambda']
-cuda_ext_args = {'cxx': ['-O3'],
-            'nvcc': nvcc_flags + cc_flag
-        }
-layernorm_cuda_args = {'cxx': ['-O3'],
-            'nvcc': nvcc_flags + cc_flag + ['-maxrregcount=50']
-        }
-setup(
-    name='fused_kernels',
-    version='0.0.1',
-    author="Sid Black & Alejandro Molina et al.",
-    author_email="alejandro.molina@aleph-alpha.de",
-    include_package_data=False,
-    ext_modules=[
-        CUDAExtension('scaled_upper_triang_masked_softmax_cuda', [str(srcpath / 'scaled_upper_triang_masked_softmax.cpp'), str(srcpath / 'scaled_upper_triang_masked_softmax_cuda.cu')],  
-                      extra_compile_args=cuda_ext_args),
-        CUDAExtension('scaled_masked_softmax_cuda', [str(srcpath / 'scaled_masked_softmax.cpp'), str(srcpath / 'scaled_masked_softmax_cuda.cu')],  
-                      extra_compile_args=cuda_ext_args),
-        CUDAExtension('fused_mix_prec_layer_norm_cuda', [str(srcpath / 'layer_norm_cuda.cpp'), str(srcpath / 'layer_norm_cuda_kernel.cu')],  
-                      extra_compile_args=layernorm_cuda_args)
-    ] if torch_cuda_available() else [],
-    cmdclass={
-        'build_ext': BuildExtension
-    })
+if __name__ == "__main__":
+    """
+    Generate text/sample model
+    """
+    model, neox_args = setup_for_inference_or_eval()
+    if neox_args.text_gen_type == 'unconditional':
+        print_rank_0('Generating samples unconditionally')
+        assert neox_args.sample_output_file is not None
+        generate_samples_unconditional(
+            neox_args=neox_args, 
+            model=model,
+            number_of_samples=neox_args.num_samples,
+            output_file=neox_args.sample_output_file,
+            maximum_tokens = neox_args.maximum_tokens, 
+            recompute = neox_args.recompute, 
+            temperature = neox_args.temperature,
+            top_k = neox_args.top_k, 
+            top_p = neox_args.top_p
+        )
+
+    elif neox_args.text_gen_type == 'input-file':
+        print_rank_0(f'Generating samples from input file {neox_args.sample_input_file}')
+        assert neox_args.sample_input_file is not None
+        generate_samples_input_from_file(
+            neox_args=neox_args, 
+            model=model,
+            input_file=neox_args.sample_input_file,
+            output_file=neox_args.sample_output_file,
+            maximum_tokens = neox_args.maximum_tokens, 
+            recompute = neox_args.recompute, 
+            temperature = neox_args.temperature,
+            top_k = neox_args.top_k, 
+            top_p = neox_args.top_p
+        )
+
+    elif neox_args.text_gen_type == 'interactive':
+        generate_samples_interactive(
+            neox_args=neox_args, 
+            model=model,
+            recompute = neox_args.recompute, 
+            temperature = neox_args.temperature,
+            top_k = neox_args.top_k, 
+            top_p = neox_args.top_p
+        )
+
+    else:
+        raise ValueError(f"`text-gen-type` either not specified or not recognised: {neox_args.text_gen_type}")
+
