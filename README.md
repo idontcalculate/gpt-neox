@@ -1,4 +1,4 @@
-###MOPTIMIZERS
+Optimizers w/parallelism
 Tested:
 Adam
 CPUAdam
